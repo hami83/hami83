@@ -10,6 +10,7 @@ from database import close_db, connect_db_fromDLM
 from AC_load import AC_load_serial
 import requests
 import pandas as pd
+from copy import deepcopy
 
 """
 
@@ -317,52 +318,95 @@ class EVSEManager:
                     EVSE_proposed_current[cp_id] = [math.floor((EVSE_proposed_rates[cp_id] * C_CP_t) * 10) / 10]
                 else:
                     print(f"NOTICE: No EVSE in use or all EVSEs fully charged @ time t")
+
+            unused_current = 0                                      # Initialise unused current for redistribution
+            EVSE_to_adjust = []                                     # Initialise list of EVSEs for current adjustment (if falls below min. current)
+
+            # CALCULATE:    Potential unused current & sort out to adjustable EVSE list
+            if any(0 < current[0] < 6 for current in EVSE_proposed_current.values()):
+
+                # CHECK & RECALCULATE: If the proposed current is less than the minimal current for EVSE charging
+                EVSE_proposed_fixed = deepcopy(EVSE_proposed_current)   # Storage reference of previously calculated proposed current values
+
+                # CALCULATE:    Total weighted value for EVSE proposed current
+                total_weighted_value = sum([EVSE_proposed_fixed[cp_id][0] for cp_id in EVSE_proposed_fixed])
+
+                # SORT: To determine a list of EVSEs to be adjusted
+                for cp_id, evse in EVSE_proposed_current.items():
+                    for current in evse:
+                        if current < 6 and current != 0:
+                            unused_current += current
+                            EVSE_to_adjust.append(cp_id)
+                        elif current >= 6:
+                            EVSE_to_adjust.append(cp_id)
+                fixed_unused_current = unused_current
+
+            # ISSUE PRESENT
+            # FLAG INITIALISATION:  Unused current availability (Boolean)
+            if unused_current > 0:
+                unused_current_exist = True
+            else:
+                unused_current_exist = False
+
+            # CONDITION:    As long as there is Unused Current leftover
+            #               OR any of EVSE Proposed Current in each EVSE (cp_id) is between 0 and 6
+            while unused_current_exist == True or any(0 < current[0] < 6 for current in EVSE_proposed_current.values()):
+                for cp_id, evse in EVSE_proposed_current.items():
+
+                    # Only applied to EVSEs which are to be adjusted (ignore EVSEs which are 0A)
+                    # EVSEs to be adjusted shall pop one at a time until While condition is False
+                    if cp_id in EVSE_to_adjust:
+                        
+                        # CALCULATE:    Add potentially Unused Current to Proposed Current
+                        add_on_current = (EVSE_proposed_fixed[cp_id][0] / total_weighted_value) * fixed_unused_current
+                        if EVSE_proposed_current[cp_id][0] < 6 and EVSE_proposed_current[cp_id][0] != 0:
+                            EVSE_proposed_current[cp_id] = [0]              # EVSEs used in unused_current shall be 0 
+                        EVSE_proposed_current[cp_id][0] += add_on_current   # Add weighted leftover current to proposed current for cp_id
+                        unused_current -= add_on_current                    # Removed added-on current from unused_current pool
+                        
+                        if unused_current == 0:
+                            unused_current_exist = False
+                    # NO:   It means that EVSE is either not in use, or has too low of a current proposed to be used
+                    else:
+                        EVSE_proposed_current[cp_id][0] = 0
+                
+                print("Updated Proposed EVSE Current: ", EVSE_proposed_current)
+      
+                # CONDITION:    After calculating new Proposed Current in above, check if it fits criteria
+                #               If it doesn't, remove cp_id from EVSE_to_adjust, and While-loop again
+                if any(0 < current[0] < 6 for current in EVSE_proposed_current.values()):
+                    unused_current = fixed_unused_current               # Reset unused current to initial unused current value
+                    unused_current_exist = True                         # Unused current now exists (While-loop remains True)
+                    EVSE_proposed_current = deepcopy(EVSE_proposed_fixed)   # EVSE proposed current shall reset to initial proposed values
+
+                    # Identifies cp_id with the smallest evse current in adjutable EVSE list for removal
+                    min_cp_id = None                                    # Initialised min. cp_id with None
+                    min_evse = float('inf')                             # Initialise min. evse current with a very large number
+
+                    for evse in EVSE_to_adjust:
+                        # Check cp_id in EVSE_proposed_current, and smallest number shall be identified
+                        if evse in EVSE_proposed_current and EVSE_proposed_current[evse][0] < min_evse:
+                            min_cp_id = evse                            # Identify smallest cp_id
+                            min_evse = EVSE_proposed_current[evse][0]   # Identify smallest evse current
+                    
+                    if min_cp_id is not None:
+                        EVSE_to_adjust.remove(min_cp_id)                # Remove smallest cp_id from adjustable EVSE list
+
+                    # CALCULATE:    New total weighted value in adjustable EVSE list
+                    total_weighted_value = sum([EVSE_proposed_fixed[cp_id][0] for cp_id in EVSE_to_adjust])
+                else:
+                    unused_current_exist = False
+
+                # print("Is there any unused current?: ", unused_current)
+                # print("new total weight: ", total_weighted_value)
+                # print("To adjust: ",EVSE_to_adjust)
+
+            for cp_id in EVSE_proposed_current:
+                EVSE_proposed_current[cp_id] = [math.floor(EVSE_proposed_current[cp_id][0] * 10) / 10]
+
             print(f"Distributed Charging Capacities to each EVSE: ", EVSE_proposed_current)
             print("*****************************************************")
             
-            ###################
-            ### UPDATED: TO CONFIRM IF THIS WORKS
-            # CHECK & RECALCULATE: If the proposed current is less than the minimal current for EVSE charging
-            leftover_current = 0                        # Initialise leftover current for redistribution
-            EVSE_to_adjust = []                         # Initialise list of EVSEs for current adjustment (if falls below min. current)
-            EVSE_proposed_wo_0 = EVSE_proposed_current  # Storage reference of previously calculated proposed current values
-            # EVSE_proposed_wo_0 = {} # Storage of previously calculated current values (ignoring 0A EVSEs) in dictionary
-
-            # UPDATE: To allocate current of 0A to EVSEs with proposed current < 6A
-            for cp_id, evse in self.evse_actual_cp().items():
-                # CHECK:    If proposed current (Charging Profile) is more than 0 and less 6A
-                # YES:
-                if EVSE_proposed_current[cp_id][0] < 6 and EVSE_proposed_current[cp_id][0] != 0:                       
-                    EVSE_to_adjust.append(cp_id)                                # Add cp_id to list of adjustable EVSEs
-                    # EVSE_proposed_wo_0[cp_id] = EVSE_proposed_current[cp_id]    # Save original current in dictionary for reference
-                    leftover_current += EVSE_proposed_current[cp_id][0]         # Add small current to leftover current (redistribution)
-                    EVSE_proposed_current[cp_id] = [0]                          # Set proposed current to 0A instead of <6A
-                # NO:       If proposed current (Charging Profile) is at least 6A
-                elif EVSE_proposed_current[cp_id][0] >= 6:  
-                    # EVSE_proposed_wo_0[cp_id] = EVSE_proposed_current[cp_id]    # Save original current in dictionary for reference
-                    EVSE_to_adjust.append(cp_id)                                # Add cp_id to list of adjustable EVSEs
-
-            # REDISTRIBUTE: If there's any current left in the pool, distribute it among adjustable EVSEs
-            # CONDITION:    As long as there is leftover current, and there are EVSEs which require adjustment
-            #               Whereby after readjustment, if EVSE is still less than 6A, updated proposed current shall be 0A
-            while leftover_current > 0 and EVSE_to_adjust:
-                # Sum of originally proposed current for weightage purposes
-                total_weighted_value = sum([EVSE_proposed_wo_0[cp_id][0] for cp_id in EVSE_to_adjust])
-
-                # In adjustable list of EVSEs (with reference to cp_id)
-                for cp_id in EVSE_to_adjust:
-                    add_on_current = (EVSE_proposed_wo_0[cp_id][0] / total_weighted_value) * leftover_current   
-                    EVSE_proposed_current[cp_id][0] += add_on_current           # Add weighted leftover current to proposed current for cp_id
-                    leftover_current -= add_on_current                          # Remove affected leftover current from pool
-
-                    # CONDITION:    If newly proposed current is still less than min. current    
-                    # YES:          Update proposed current (<6A) to 0A & add current to leftover current 
-                    if EVSE_proposed_current[cp_id][0] < 6:
-                        leftover_current += EVSE_proposed_current[cp_id][0]     # Add affected current into leftover current pool
-                        total_weighted_value -= EVSE_proposed_wo_0[cp_id][0]    # Remove cp_id current from weighted value
-                        EVSE_proposed_current[cp_id] = [0]                      # Set proposed current to 0A
-                        EVSE_to_adjust.remove(cp_id)                            # Remove cp_id from adjustable EVSE list
-
             self.check_for_updates(EVSE_proposed_current)
 
             # EVSE_T_proposed_current = sum(EVSE_proposed_current[cp_id][0] for cp_id in EVSE_proposed_current) # Total Proposed EVSE Charging Current
