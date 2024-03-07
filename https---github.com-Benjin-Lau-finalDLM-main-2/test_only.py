@@ -1,6 +1,6 @@
 # import libraries
 import math
-import copy
+from copy import deepcopy
 
 
 def test():
@@ -30,9 +30,9 @@ def test():
             EVSE_proposed_current = {'LOSa' : [10],
                                      'LOSb' : [10],
                                      'LOSc' : [0],
-                                     'LOSd' : [2],
+                                     'LOSd' : [5],
                                      'LOSe' : [5],
-                                     'LOSf' : [3],
+                                     'LOSf' : [5],
                                     }
             print(f"Initial Distributed Charging Capacities to each EVSE: ", EVSE_proposed_current)
 
@@ -40,8 +40,8 @@ def test():
             ### UPDATED: TO CONFIRM IF THIS WORKS
             # CHECK & RECALCULATE: If the proposed current is less than the minimal current for EVSE charging
             unused_current = 0                                          # Initialise unused current for redistribution
-            EVSE_to_adjust = []                                         # Initialise list of EVSEs for current adjustment (if falls below min. current)
-            EVSE_proposed_wo_0 = {cp_id: copy.deepcopy(evse) for cp_id, evse in EVSE_proposed_current.items()}   # Storage reference of previously calculated proposed current values
+            EVSE_to_adjust = []                               # Initialise list of EVSEs for current adjustment (if falls below min. current)
+            EVSE_proposed_wo_0 = {cp_id: deepcopy(evse) for cp_id, evse in EVSE_proposed_current.items()}   # Storage reference of previously calculated proposed current values
             # EVSE_proposed_wo_0 = {cp_id: evse[:] for cp_id, evse in EVSE_proposed_current.items()}
             print("======")
             print("Fixed EVSE proposed current is: ", EVSE_proposed_wo_0)
@@ -107,7 +107,7 @@ def test():
                     unused_current = fixed_unused_current               # Reset unused current to initial unused current value
                     unused_current_exist = True                         # Unused current now exists (While-loop remains True)
                     print("EVSE fixed value should be :", EVSE_proposed_wo_0)
-                    EVSE_proposed_current = EVSE_proposed_wo_0.copy()   # EVSE proposed current shall reset to initial proposed values
+                    EVSE_proposed_current = deepcopy(EVSE_proposed_wo_0)   # EVSE proposed current shall reset to initial proposed values
 
                     # Identifies cp_id with the smallest evse current in adjutable EVSE list for removal
                     min_cp_id = None                                    # Initialised min. cp_id with None
@@ -143,44 +143,3 @@ def test():
 
 
 test()
-
-# EVSE_proposed_current = {'LOSa' : [10],
-#                             'LOSb' : [10],
-#                             'LOSc' : [0],
-#                             'LOSd' : [2],
-#                             'LOSe' : [5],
-#                             'LOSf' : [3],
-#                         }
-
-# min_cp_id = None
-# min_evse = float('inf') # Initialise with a very large number
-
-# unused_current = 0
-# EVSE_to_adjust = []
-# for cp_id, evse in EVSE_proposed_current.items():
-#     for current in evse:
-#         if current < 6 and current != 0:
-#             unused_current += current
-#             EVSE_to_adjust.append(cp_id)
-#         elif current >= 6:
-#             EVSE_to_adjust.append(cp_id)
-# print(EVSE_to_adjust)
-
-# if any(0 < current[0] < 6 for current in EVSE_proposed_current.values()):
-                    
-#     min_cp_id = None
-#     min_evse = float('inf') # Initialise with a very large number
-
-#     for evse in EVSE_to_adjust:
-#         if evse in EVSE_proposed_current and EVSE_proposed_current[evse][0] < min_evse:
-#             min_cp_id = evse
-#             min_evse = EVSE_proposed_current[evse][0]
-
-#     if min_cp_id is not None:
-#         EVSE_to_adjust.remove(min_cp_id)
-# print(EVSE_to_adjust)
-
-
-
-# # min_cp_id_in_list = min(min_cp_id, cp_id=lambda x: EVSE_to_adjust.index(x))
-# # print(min_cp_id_in_list)
