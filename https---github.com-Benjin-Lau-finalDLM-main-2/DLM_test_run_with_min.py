@@ -303,21 +303,16 @@ class EVSEManager:
 
             # REPLACE:      EVSE values at time t-1 with new values at time t
             # CALCULATE:    Charging Rate of EACH EVSE in use at time t
+            #               Charging Capacity for EACH EVSE in use at time t
             print("Proposed Charging Rates & Charging Capacities of each EVSEs (based on DLM) shall be calculated!")
             for cp_id, evse in self.evse_actual_cp().items():
                 if EVSE_Max_Total_t != 0:
                     EVSE_proposed_rates[cp_id] = ((EVSE_Max_t[cp_id] * (1 - EV_state_t[cp_id]) / EVSE_Max_Total_t))
+                    EVSE_proposed_current[cp_id] = [math.floor((EVSE_proposed_rates[cp_id] * C_CP_t) * 10) / 10]
                 else:
                     print(f"NOTICE: No EVSE in use or all EVSEs fully charged @ time t")
             print("*****************************************************")
             print(f"Distributed Charging Rates to each EVSE: ", EVSE_proposed_rates)
-
-            # CALCULATE:    Charging Capacity for EACH EVSE in use at time t
-            for cp_id, evse in self.evse_actual_cp().items():
-                if cp_id in list(EVSE_proposed_rates.keys()):
-                    EVSE_proposed_current[cp_id] = [math.floor((EVSE_proposed_rates[cp_id] * C_CP_t) * 10) / 10]
-                else:
-                    print(f"NOTICE: No EVSE in use or all EVSEs fully charged @ time t")
 
             unused_current = 0                                      # Initialise unused current for redistribution
             EVSE_to_adjust = []                                     # Initialise list of EVSEs for current adjustment (if falls below min. current)
@@ -333,24 +328,20 @@ class EVSEManager:
 
                 # SORT: To determine a list of EVSEs to be adjusted
                 for cp_id, evse in EVSE_proposed_current.items():
-                    for current in evse:
-                        if current < 6 and current != 0:
-                            unused_current += current
-                            EVSE_to_adjust.append(cp_id)
-                        elif current >= 6:
-                            EVSE_to_adjust.append(cp_id)
+                    if 0 < evse[0] < 6:
+                        unused_current += evse[0]
+                        EVSE_to_adjust.append(cp_id)
+                    elif evse[0] >= 6:
+                        EVSE_to_adjust.append(cp_id)
+
                 fixed_unused_current = unused_current
 
-            # ISSUE PRESENT
             # FLAG INITIALISATION:  Unused current availability (Boolean)
-            if unused_current > 0:
-                unused_current_exist = True
-            else:
-                unused_current_exist = False
+            unused_current_exist = unused_current > 0
 
             # CONDITION:    As long as there is Unused Current leftover
             #               OR any of EVSE Proposed Current in each EVSE (cp_id) is between 0 and 6
-            while unused_current_exist == True or any(0 < current[0] < 6 for current in EVSE_proposed_current.values()):
+            while unused_current_exist or any(0 < current[0] < 6 for current in EVSE_proposed_current.values()):
                 for cp_id, evse in EVSE_proposed_current.items():
 
                     # Only applied to EVSEs which are to be adjusted (ignore EVSEs which are 0A)
@@ -363,20 +354,17 @@ class EVSEManager:
                             EVSE_proposed_current[cp_id] = [0]              # EVSEs used in unused_current shall be 0 
                         EVSE_proposed_current[cp_id][0] += add_on_current   # Add weighted leftover current to proposed current for cp_id
                         unused_current -= add_on_current                    # Removed added-on current from unused_current pool
-                        
-                        if unused_current == 0:
-                            unused_current_exist = False
+
                     # NO:   It means that EVSE is either not in use, or has too low of a current proposed to be used
                     else:
                         EVSE_proposed_current[cp_id][0] = 0
                 
-                print("Updated Proposed EVSE Current: ", EVSE_proposed_current)
+                # print("Updated Proposed EVSE Current: ", EVSE_proposed_current)
       
                 # CONDITION:    After calculating new Proposed Current in above, check if it fits criteria
                 #               If it doesn't, remove cp_id from EVSE_to_adjust, and While-loop again
                 if any(0 < current[0] < 6 for current in EVSE_proposed_current.values()):
                     unused_current = fixed_unused_current               # Reset unused current to initial unused current value
-                    unused_current_exist = True                         # Unused current now exists (While-loop remains True)
                     EVSE_proposed_current = deepcopy(EVSE_proposed_fixed)   # EVSE proposed current shall reset to initial proposed values
 
                     # Identifies cp_id with the smallest evse current in adjutable EVSE list for removal
