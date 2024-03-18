@@ -13,21 +13,26 @@ import pandas as pd
 from copy import deepcopy
 
 """
-
-DYNAMIC LOAD MANAGEMENT (DLM) ver 1.0.2
----
+---------------------------------------------------------------------------------------------------------------------------
+DYNAMIC LOAD MANAGEMENT (DLM) ver 1.1.1
+---------------------------------------------------------------------------------------------------------------------------
 Initial Completion Date: 11 January 2024
-Version Update Date: 17 January 2024
+Version Update Date: 15 March 2024
 
 Version Updates:
+---------------------------------------------------------------------------------------------------------------------------
+- 18 March 2023:    Updated algorithm (SCENARIO 3)
+                    To take into consideration max. rated EV charging current
+- 15 March 2024:    Updated algorithm (SCENARIO 3)
+                    To take into consideration 6A minimum permissible EV charging current
 - 17 January 2024:  Added threshold_gradient() - temporarily hard-coded
                     Amended evse_proposed_cp for database update based on cp_id
                     Deleted load_total_evse_count() & get_total_load()
 - 11 January 2024:  Initial Version
                     
----
+---------------------------------------------------------------------------------------------------------------------------
 SUMMARISED INFORMATION
-
+---------------------------------------------------------------------------------------------------------------------------
 Functions:  1) __init__                 To set initial values
             2) get_total_load           To get onsite total load from modbus tcp or rtu
             3) threshold_gradient       To calculate threshold gradient in triggering DLM based of gradient of total load
@@ -37,28 +42,32 @@ Functions:  1) __init__                 To set initial values
             7) evse_actual_cp           To read actual values from EVSE database (cp_id, evse_max_a, evse_meter, evse_status)
             8) evse_proposed_cp         To load proposed Charging Profile to EVSE proposed database (CP_ID, TIME_10)
 
----
+---------------------------------------------------------------------------------------------------------------------------
 DEFINITIONS
-
+---------------------------------------------------------------------------------------------------------------------------
+VARIABLE NAME       DEFINITION                                              UNIT            DATATYPE
 >> Fixed Variables <<
-time_interval       Time interval between each iteration (in seconds)
-site_capacity       Maximum site capacity (in A)
-timeslots           Number of timeslots to store in database (in integer)
-cp_proposed_db      EVSE proposed database name (in string)
-cp_actual_db        EVSE actual database name (in string)
+time_interval       Time interval between each iteration                    seconds         int
+site_capacity       Maximum site capacity                                   amperes         float
+timeslots           Number of timeslots to store in database                -               integer
+cp_proposed_db      EVSE proposed database name                             -               string
+cp_actual_db        EVSE actual database name                               -               string
+EVSE_n_max          Maximum current rating for each EVSE                    amperes         string
 
 >> Thresholds <<
-trigger_percent     Percentage of site capacity to trigger DLM (in decimal)
-release_percent     Percentage of site capacity to release DLM (in decimal)
-trigger_threshold   Trigger threshold for DLM activation (in A)
-release_threshold   Release threshold for DLM deactivation (in A)
-threshold_gradient  Threshold gradient to trigger Charging Profile change (in A/s)
+trigger_percent     Percentage of site capacity to trigger DLM              percentage      float
+release_percent     Percentage of site capacity to release DLM              percentage      float
+trigger_threshold   Trigger threshold for DLM activation                    amperes         float
+release_threshold   Release threshold for DLM deactivation                  amperes         float
+threshold_gradient  Threshold gradient to trigger Charging Profile change   amperes/second  float
 
 >> Currents <<
-C_CP_t              Available charging capacity (Used EVSE current + Unused current based off trigger threshold)
-C_CP_t_minus_1      Available charging capacity at time t-1
+C_CP_t              Available charging capacity, which includes             amperes         float
+                    1) Used EVSE current
+                    2) Unused current based off trigger threshold
+C_CP_t_minus_1      Available charging capacity at time t-1                 amperes         float
 EVSE_T_t_minus_1    Total EVSE current = C_CP_t_minus_1 or 
-
+---------------------------------------------------------------------------------------------------------------------------
 """
 
 class EVSEManager:
@@ -279,15 +288,27 @@ class EVSEManager:
             #############################################################################
 
             """
+            ---------------------------------------------------------------------------------------------------------------------------
             FUNCTIONS & VARIABLES DEFINITION
+            ---------------------------------------------------------------------------------------------------------------------------
             EV_state_t              Status of EVSEs (Fully Charged/Not Charging (fault) = 1, Otherwise = 0)
             EVSE_Max_t              Max. Charging Current for each EVSE
             EVSE_Max_Total_t        Total Max. Charging Current for all EVSEs in USE at time t
             EVSE_proposed_rates     Proposed Charging Rate (%) for each EVSE
             EVSE_proposed_current   Proposed Charging Current (A) for each EVSE
+            EVSE_to_adjust          Charging Profile of EVSEs to adjust based off unused current
 
+            C_CP_t_minus_1          Actual EVSE current values at time t-1 based off EVSE database
+            current_pool            Difference between proposed current and max. rated current when proposed > max. rated
+            min_cp_id               CP ID with the smallest proposed current value (ignoring 0)
+            min_evse                Smallest proposed current value (ignoring 0)
+
+            unused_current          Unused current for redistribution after distributing available charging current
+            fixed_unused_current    Fixed copy as reference for unused current for redistribution after distributing available charging current
+            unused_current_exist    This is True when unused current is more than zero            
+            ---------------------------------------------------------------------------------------------------------------------------
             """
-            print(f"Charging Profile shall be Updated!")
+            print(f"Charging Profile shall be Updated based on DLM!")
 
             # RETRIEVE: EVSE actual values @ time t & Total Max
             C_CP_t_minus_1 = round(sum(float(evse['evse_meter']) for cp_id, evse in self.evse_actual_cp().items()), 1)
@@ -296,8 +317,12 @@ class EVSEManager:
             for cp_id, evse in self.evse_actual_cp().items():
                 EV_state_t[cp_id] = int(evse['evse_status'])    # Create a dictionary containing {cp_id: evse_status}
 
+            # INITIALISATION
+            EVSE_Max_Total_t = 0    # Summation of Max. Rated Current of EVSEs in use at time t
+            unused_current = 0      # Unused current for redistribution
+            EVSE_to_adjust = []     # List of EVSEs for current adjustment
+
             # SUM: Calculate POTENTIAL Total Max EVSE Capacity in use (n) @ time t
-            EVSE_Max_Total_t = 0 # Initialise
             EVSE_Max_t = {key: self.EVSE_n_max[key] * (1 - EV_state_t[key]) for key in self.EVSE_n_max if key in EV_state_t}
             EVSE_Max_Total_t = sum(EVSE_Max_t.values()) # TIP: Value of EVSE_Max_Total_t changes as EVSE_n changes
 
@@ -309,16 +334,21 @@ class EVSEManager:
                 if EVSE_Max_Total_t != 0:
                     EVSE_proposed_rates[cp_id] = ((EVSE_Max_t[cp_id] * (1 - EV_state_t[cp_id]) / EVSE_Max_Total_t))
                     EVSE_proposed_current[cp_id] = [math.floor((EVSE_proposed_rates[cp_id] * C_CP_t) * 10) / 10]
+                    # If proposed EVSE current is more than max. rated EVSE current, use max. rated EVSE current instead
+                    if EVSE_proposed_current[cp_id][0] > self.EVSE_n_max[cp_id]:
+                        current_pool = EVSE_proposed_current[cp_id][0] - self.EVSE_n_max[cp_id]
+                        unused_current += current_pool
+                        EVSE_proposed_current[cp_id] = [self.EVSE_n_max[cp_id]]
                 else:
                     print(f"NOTICE: No EVSE in use or all EVSEs fully charged @ time t")
             print("*****************************************************")
             print(f"Distributed Charging Rates to each EVSE: ", EVSE_proposed_rates)
 
-            unused_current = 0                                      # Initialise unused current for redistribution
-            EVSE_to_adjust = []                                     # Initialise list of EVSEs for current adjustment (if falls below min. current)
+            # FLAG INITIALISATION:  Unused current availability (Boolean)
+            unused_current_exist = unused_current > 0
 
             # CALCULATE:    Potential unused current & sort out to adjustable EVSE list
-            if any(0 < current[0] < 6 for current in EVSE_proposed_current.values()):
+            if any(0 < current[0] < 6 for current in EVSE_proposed_current.values()) or unused_current_exist:
 
                 # CHECK & RECALCULATE: If the proposed current is less than the minimal current for EVSE charging
                 EVSE_proposed_fixed = deepcopy(EVSE_proposed_current)   # Storage reference of previously calculated proposed current values
@@ -328,16 +358,16 @@ class EVSEManager:
 
                 # SORT: To determine a list of EVSEs to be adjusted
                 for cp_id, evse in EVSE_proposed_current.items():
-                    if 0 < evse[0] < 6:
-                        unused_current += evse[0]
-                        EVSE_to_adjust.append(cp_id)
-                    elif evse[0] >= 6:
-                        EVSE_to_adjust.append(cp_id)
+                    # DETERMINE:    Only cp_ids with proposed current < max. rated current is added to adjustable list
+                    # OTHERWISE:    Ignore cp_ids (not to be adjusted at all)
+                    if EVSE_proposed_current[cp_id][0] < self.EVSE_n_max[cp_id]:    
+                        if 0 < evse[0] < 6:
+                            unused_current += evse[0]
+                            EVSE_to_adjust.append(cp_id)
+                        elif evse[0] >= 6:
+                            EVSE_to_adjust.append(cp_id)
 
                 fixed_unused_current = unused_current
-
-            # FLAG INITIALISATION:  Unused current availability (Boolean)
-            unused_current_exist = unused_current > 0
 
             # CONDITION:    As long as there is Unused Current leftover
             #               OR any of EVSE Proposed Current in each EVSE (cp_id) is between 0 and 6
@@ -396,9 +426,8 @@ class EVSEManager:
             print("*****************************************************")
             
             self.check_for_updates(EVSE_proposed_current)
-
-            # EVSE_T_proposed_current = sum(EVSE_proposed_current[cp_id][0] for cp_id in EVSE_proposed_current) # Total Proposed EVSE Charging Current
             self.evse_proposed_cp(EVSE_proposed_current)    # Update EVSEproposed db with new Charging Current values @ time t
+            # EVSE_T_proposed_current = sum(EVSE_proposed_current[cp_id][0] for cp_id in EVSE_proposed_current) # Total Proposed EVSE Charging Current
 
             return EVSE_proposed_current
         
