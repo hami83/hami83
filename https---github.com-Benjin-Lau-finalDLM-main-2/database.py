@@ -81,9 +81,15 @@ def create_db_fromDLM(num):
 
     conn.close() # Close the connection
 
-def connect_db_fromDLM():
+def connect_db_fromDLM_current():
     # Connect to SQLite database
-    conn = sqlite3.connect('evse_proposed_cp.db')
+    conn = sqlite3.connect('evse_proposed_current_cp.db')
+    c = conn.cursor()
+    return conn, c
+
+def connect_db_fromDLM_power():
+    # Connect to SQLite database
+    conn = sqlite3.connect('evse_proposed_power_cp.db')
     c = conn.cursor()
     return conn, c
 

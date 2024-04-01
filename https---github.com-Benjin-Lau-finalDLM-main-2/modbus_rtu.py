@@ -177,29 +177,49 @@ def get_latest_reading(column):
 
     return data_t, data_t_minus_1
 
-def run():
+# --------------------------------------------------------------------------
+# SINGLE-PHASE CURRENT OUTPUT ONLY (ACTUAL!)
+# def run():
+#     readings = unit_adjustment()
+#     process_and_store_readings(readings)
+#     [result_t, result_t_minus_1] = get_latest_reading('A')
+
+#     return result_t, result_t_minus_1
+# --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# THREE-PHASE CURRENT OUTPUT (DUMMY ONLY! DOESN'T EXIST FOR THIS DPM)
+def total_current():
     readings = unit_adjustment()
     process_and_store_readings(readings)
-    [result_t, result_t_minus_1] = get_latest_reading('A')
+    [total_load_t, total_load_t_minus_1] = get_latest_reading('A')
 
-    return result_t, result_t_minus_1
+    return total_load_t, total_load_t_minus_1
+
+def line_current():
+    readings = unit_adjustment()
+    process_and_store_readings(readings)
+    [site_L1_current, site_L2_current, site_L3_current] = get_latest_reading('A')
+
+    return site_L1_current, site_L2_current, site_L3_current
+# --------------------------------------------------------------------------
 
 # -------------------------------------------------------------------------- #
 # Main Loop for Modbus RTU
     
-def main():
-    # initialise_db_rtu()
+# def main():
+#     # initialise_db_rtu()
 
-    while True:
-        readings = unit_adjustment()
-        process_and_store_readings(readings)
-        [result_t, result_t_minus_1] = get_latest_reading('A')
-        logging.info(f"Current t is {result_t}A, and Current t-1 is {result_t_minus_1}A")
-        time.sleep(1)
+#     while True:
+#         readings = unit_adjustment()
+#         process_and_store_readings(readings)
+#         [result_t, result_t_minus_1] = get_latest_reading('A')
+#         logging.info(f"Current t is {result_t}A, and Current t-1 is {result_t_minus_1}A")
+#         time.sleep(1)
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    main()
+# if __name__ == "__main__":
+#     logging.basicConfig(level=logging.INFO)
+#     main()
 
 # -------------------------------------------------------------------------- #
 # Debug for Byte Order & Word Order combination for Modbus RTU
